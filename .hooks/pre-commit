@@ -5,3 +5,13 @@ deno check src/
 deno run -A npm:lint-staged
 deno lint src/
 deno fmt --check src/
+
+FILES=$(git diff --cached --name-only -- '*.ts')
+
+# Loop through each file
+for file in $FILES; do
+  # Use `sed` to replace 4 spaces with 2 spaces 
+  sed -i 's/    /  /g' "$file"
+  # Add the updated file back to the staging area
+  git add "$file"
+done
