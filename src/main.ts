@@ -6,5 +6,5 @@ testBtn.innerHTML = "Test";
 app.append(testBtn);
 
 testBtn.addEventListener("click", function () {
-    alert("Button Clicked");
+  alert("Button Clicked");
 });
