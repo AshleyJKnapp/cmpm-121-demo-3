@@ -76,6 +76,18 @@ button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
 }
 
+#value {
+  color: #002088;
+}
+
+#collect {
+  background-color: #579757;
+}
+
+#deposit {
+  background-color: #d36657;
+}
+
 @media (prefers-color-scheme: light) {
   :root {
     color: #213547;
