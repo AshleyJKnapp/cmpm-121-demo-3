@@ -29,23 +29,19 @@ export class Board {
 
   getCellForPoint(point: leaflet.LatLng): Cell {
     return this.getCanonicalCell({
-      i: Math.floor(point.lat * 1e4),
-      j: Math.floor(point.lng * 1e4),
+      i: Math.floor(point.lat / this.tileWidth),
+      j: Math.floor(point.lng / this.tileWidth),
+      // i: Math.floor(point.lat),
+      // j: Math.floor(point.lng),
     });
   }
 
   getCellBounds(cell: Cell): leaflet.LatLngBounds {
-    const bounds = leaflet.latLngBounds([
-      [
-        cell.i / 1e4,
-        cell.j / 1e4,
-      ],
-      [
-        (cell.i + 1) / 1e4,
-        (cell.j + 1) / 1e4,
-      ],
-    ]);
-    return leaflet.latLngBounds(bounds);
+    const bounds = leaflet.latLng(
+      cell.i * this.tileWidth,
+      cell.j * this.tileWidth,
+    );
+    return leaflet.latLng(bounds);
   }
 
   getCellsNearPoint(point: leaflet.LatLng): Cell[] {
@@ -62,7 +58,10 @@ export class Board {
         r++
       ) {
         resultCells.push(
-          this.getCanonicalCell({ i: originCell.i + c, j: originCell.j + r }),
+          this.getCanonicalCell({
+            i: originCell.i + c,
+            j: originCell.j + r,
+          }),
         );
       }
     }

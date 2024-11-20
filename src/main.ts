@@ -11,15 +11,17 @@ import "./leafletWorkaround.ts";
 
 // Deterministic random number generator
 import luck from "./luck.ts";
-// const temp = new Board(5, 10);
 
+// ------------------------------------------------------
+// ------ CONSTANTS ------
+// ------------------------------------------------------
 // Location of our classroom (as identified on Google Maps)
 const OAKES_CLASSROOM = leaflet.latLng(36.98949379578401, -122.06277128548504);
 
 // Tunable gameplay parameters
 const GAMEPLAY_ZOOM_LEVEL = 19;
 const GAMEPLAY_MIN_ZOOM_LEVEL = 18;
-// const GAMEPLAY_MAX_ZOOM_LEVEL = 19;
+const GAMEPLAY_MAX_ZOOM_LEVEL = 19;
 const TILE_DEGREES = 1e-4;
 const NEIGHBORHOOD_SIZE = 8;
 const CACHE_SPAWN_PROBABILITY = 0.1;
@@ -29,7 +31,7 @@ const map = leaflet.map(document.getElementById("map")!, {
   center: OAKES_CLASSROOM,
   zoom: GAMEPLAY_ZOOM_LEVEL,
   minZoom: GAMEPLAY_MIN_ZOOM_LEVEL,
-  maxZoom: GAMEPLAY_ZOOM_LEVEL,
+  maxZoom: GAMEPLAY_MAX_ZOOM_LEVEL,
   zoomControl: false,
   scrollWheelZoom: true,
   dragging: true,
@@ -44,83 +46,203 @@ leaflet
   })
   .addTo(map);
 
-// Add a marker to represent the player
-const playerMarker = leaflet.marker(OAKES_CLASSROOM);
-playerMarker.bindTooltip("That's you!");
-playerMarker.addTo(map);
-
-interface Cell {
-  readonly i: number;
-  readonly j: number;
-}
-
+// ------------------------------------------------------
+// ------ DATA STRUCTURES ------
+// ------------------------------------------------------
 interface Coin {
-  cell: Cell;
+  i: number;
+  j: number;
   serial: number;
 }
 
-interface Cache {
+interface Momento<T> {
+  toMomento(): T;
+  fromMomento(momento: T): void;
+}
+
+class Geocache implements Momento<string> {
+  i: number;
+  j: number;
   coins: Coin[];
-  cell: Cell;
+  constructor() {
+    this.i = 0;
+    this.j = 1;
+    //this.numCoins = 0;
+    this.coins = [];
+  }
+  toMomento() {
+    const coinsJson = JSON.stringify(this.coins);
+    return JSON.stringify({ i: this.i, j: this.j, coins: coinsJson });
+  }
+
+  fromMomento(momento: string) {
+    const parsedObj = JSON.parse(momento);
+    this.coins.length = 0;
+    this.i = parsedObj.i;
+    this.j = parsedObj.j;
+    const parsedCoins = JSON.parse(parsedObj.coins);
+    for (let k = 0; k < parsedCoins.length; k++) {
+      const newi = parsedCoins[k].i;
+      const newj = parsedCoins[k].j;
+      const newSerial = parsedCoins[k].serial;
+      const newCoin = { i: newi, j: newj, serial: newSerial };
+      this.coins.push(newCoin);
+    }
+  }
+}
+
+// --------------------------------------------------------------------
+// ------ INITIALIZATIONS & SET UP ------
+// --------------------------------------------------------------------
+// Add a marker to represent the player
+let playerLocation = OAKES_CLASSROOM;
+const playerMarker = leaflet.marker(playerLocation);
+playerMarker.bindTooltip("That's you!");
+playerMarker.addTo(map);
+
+// Display the player's points
+const playerCoins: Coin[] = [];
+const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!;
+statusPanel.innerHTML = "No presents yet..";
+
+// Custom icon for cache spots
+const cacheIcon = new leaflet.DivIcon({
+  className: "custom-cache-icon",
+  html: '<font size="5">🎄</font>',
+  iconSize: [0, 0],
+  iconAnchor: [0, 0],
+});
+const cacheIconArray: leaflet.Layer[] = [];
+
+// Grid System for displaying caches on
+const mapBoard = new Board(TILE_DEGREES, NEIGHBORHOOD_SIZE);
+
+// Temporary Data Storage
+const geocacheArr: Geocache[] = [];
+const momentoArr: string[] = [];
+
+// --------------------------------------------------------------------
+// ------ PLAYER MOVEMENT ------
+// --------------------------------------------------------------------
+// Moves the player and spawns/regenerates caches around them
+const playerMoved = new Event("player-moved");
+document.addEventListener("player-moved", function () {
+  playerMarker.setLatLng(playerLocation);
+  map.panTo(playerLocation);
+  updateMomento();
+  clearCacheMarker(); // Clear current markers before redrawing
+  spawnCache(playerLocation); // Spawn in caches surrounding the player
+});
+
+// Move the player to lat, lng
+function playerMoveTo(lat: number, lng: number) {
+  playerLocation = leaflet.latLng(lat, lng);
+  document.dispatchEvent(playerMoved);
+}
+
+// -- Movement Buttons --
+const northBtn = document.querySelector<HTMLButtonElement>("#north")!;
+northBtn.addEventListener("click", function () {
+  playerMoveTo(playerLocation.lat + TILE_DEGREES, playerLocation.lng);
+});
+
+const southBtn = document.querySelector<HTMLButtonElement>("#south")!;
+southBtn.addEventListener("click", function () {
+  playerMoveTo(playerLocation.lat - TILE_DEGREES, playerLocation.lng);
+});
+
+const westBtn = document.querySelector<HTMLButtonElement>("#west")!;
+westBtn.addEventListener("click", function () {
+  playerMoveTo(playerLocation.lat, playerLocation.lng - TILE_DEGREES);
+});
+
+const eastBtn = document.querySelector<HTMLButtonElement>("#east")!;
+eastBtn.addEventListener("click", function () {
+  playerMoveTo(playerLocation.lat, playerLocation.lng + TILE_DEGREES);
+});
+
+// --------------------------------------------------------------------
+// ------ CACHE SPAWNING ------
+// --------------------------------------------------------------------
+// Add caches to the map
+function spawnCache(origin: leaflet.LatLng) {
+  // Look at all cells around the provided origin
+  // Check each cell for luck and nstantiate a cache if it is lucky
+  const cellArr = mapBoard.getCellsNearPoint(origin);
+  cellArr.forEach((cell) => {
+    if (
+      luck([cell.i, cell.j].toString()) < CACHE_SPAWN_PROBABILITY
+    ) {
+      const momentoIdx = searchMomento(cell.i, cell.j);
+      let cache = new Geocache();
+      if (momentoIdx == null) {
+        cache = instantiateCache(cell.i, cell.j);
+      } else {
+        cache.fromMomento(momentoArr[momentoIdx]);
+      }
+      drawCache(cache);
+    }
+  });
+}
+
+// Clear the cache markers from the map
+function clearCacheMarker() {
+  for (let i = 0; i < cacheIconArray.length; i++) {
+    map.removeLayer(cacheIconArray[i]);
+  }
+  cacheIconArray.length = 0;
+}
+
+// Creates a cache for the first time
+function instantiateCache(i: number, j: number): Geocache {
+  // console.log("instancing caches");
+  const cache = new Geocache();
+  cache.i = i;
+  cache.j = j;
+  cache.coins = [];
+  geocacheArr.push(cache);
+
+  // Each cache has a random number of coins, mutable by the player
+  const pointValue = Math.floor(luck([i, j, "initialValue"].toString()) * 100);
+  // Spawn coins in
+  for (let k = 0; k < pointValue; k++) {
+    const coin: Coin = { i: i, j: j, serial: k };
+    cache.coins.push(coin);
+  }
+
+  return cache;
 }
 
 // Transfers an amount from the sender Coin[] to reciever Coin[]
 // Returns the transferred coin if successful, null otherwise
+// *Note: currently doesn't support multiple coins
 function transferCoins(sender: Coin[], reciever: Coin[], amt: number) {
   if (sender.length >= amt) {
     const tempCoin = sender.pop()!;
-    reciever.push(tempCoin);
+    reciever.push(tempCoin); // I'll be honest, I do not remember if this line works.
     return tempCoin;
   } else {
     return null;
   }
 }
 
-// Display the player's points
-const playerCoins: Coin[] = [];
-const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!; // element `statusPanel` is defined in index.html
-statusPanel.innerHTML = "No points yet...";
-
-// TODO: Implement player-inventory-changed
-// Show all of the tokens the player owns
-
-const mapBoard = new Board(TILE_DEGREES, NEIGHBORHOOD_SIZE);
-
-// Add caches to the map by cell numbers
-function spawnCache(i: number, j: number) {
-  // Convert cell numbers into lat/lng bounds
-  const origin = OAKES_CLASSROOM;
-  i = origin.lat + i * TILE_DEGREES;
-  j = origin.lng + j * TILE_DEGREES;
-
-  // Set Cache location with flyweight
-  const point: leaflet.LatLng = leaflet.latLng(i, j);
-  const thisCell = mapBoard.getCellForPoint(point);
-  const bounds = mapBoard.getCellBounds(thisCell);
-
-  // Add a rectangle to the map to represent the cache
-  const rect = leaflet.rectangle(bounds);
-  rect.addTo(map);
-  const cache: Cache = { coins: [], cell: thisCell };
-
-  // Each cache has a random point value, mutable by the player
-  const pointValue = Math.floor(luck([i, j, "initialValue"].toString()) * 100);
-
-  for (let k = 0; k < pointValue; k++) {
-    const cell: Cell = thisCell;
-    const serial: number = k;
-    const coin: Coin = { cell, serial };
-    cache.coins.push(coin);
-  }
+// Draws the cache onto the map, as well as enables the pop up for interacting
+function drawCache(cache: Geocache) {
+  // Add a marker to the map to represent the cache
+  // and push into array for deletion later
+  const bounds = mapBoard.getCellBounds({ i: cache.i, j: cache.j }); // Simplified coords of cache for drawing icon
+  const cacheMarker = leaflet.marker(bounds, { icon: cacheIcon });
+  cacheMarker.addTo(map);
+  cacheIconArray.push(cacheMarker);
 
   // Handle interactions with the cache
-  rect.bindPopup(() => {
+  cacheMarker.bindPopup(() => {
     // The popup offers a description and button
     const popupDiv = document.createElement("div");
     popupDiv.innerHTML = `
-                <div>There is a cache here at "${thisCell.i},${thisCell.j}". It has <span id="value">${cache.coins.length}</span> coins</span>.</div>
-                <button id="collect">collect</button>
-                <button id="deposit">deposit</button>`;
+                <div>There is a Christmas tree here at "${cache.i},${cache.j}". It has <span id="value">${cache.coins.length}</span> presents</span>.</div>
+                <button id="collect">Steal 🎁</button>
+                <button id="deposit">Give 🎁</button>`;
 
     // Clicking the button decrements the cache's value and increments the player's points
     popupDiv
@@ -132,9 +254,9 @@ function spawnCache(i: number, j: number) {
           popupDiv.querySelector<HTMLSpanElement>("#value")!.innerHTML = cache
             .coins.length.toString();
           statusPanel.innerHTML =
-            `Collected Coin ${transferred.cell.i}:${transferred.cell.j}#${transferred.serial}<br>${playerCoins.length} points accumulated`;
+            `Stolen present ${transferred.i}:${transferred.j}#${transferred.serial}<br>${playerCoins.length} presents stolen`;
         } else {
-          alert("you sucked it dry bruh");
+          alert("There's no more presents to give.");
         }
       });
 
@@ -148,9 +270,9 @@ function spawnCache(i: number, j: number) {
           popupDiv.querySelector<HTMLSpanElement>("#value")!.innerHTML = cache
             .coins.length.toString();
           statusPanel.innerHTML =
-            `Deposited Coin ${transferred.cell.i}:${transferred.cell.j}#${transferred.serial}<br>${playerCoins.length} points accumulated`;
+            `Given present ${transferred.i}:${transferred.j}#${transferred.serial}<br>${playerCoins.length} presents stolen`;
         } else {
-          alert("you are too broke bruh");
+          alert("Your sack is empty.");
         }
       });
 
@@ -158,12 +280,40 @@ function spawnCache(i: number, j: number) {
   });
 }
 
-// Look around the player's neighborhood for caches to spawn
-for (let i = -NEIGHBORHOOD_SIZE; i < NEIGHBORHOOD_SIZE; i++) {
-  for (let j = -NEIGHBORHOOD_SIZE; j < NEIGHBORHOOD_SIZE; j++) {
-    // If location i,j is lucky enough, spawn a cache!
-    if (luck([i, j].toString()) < CACHE_SPAWN_PROBABILITY) {
-      spawnCache(i, j);
+// -- Momento Temporary Data Storage --
+// Searches the momento array for a matching cell, returning the index of the item if found, and null otherwise
+function searchMomento(i: number, j: number): number | null {
+  // Look for item i,j in momentoArr
+  for (let m = 0; m < momentoArr.length; m++) {
+    const parsedObj = JSON.parse(momentoArr[m]);
+    if (parsedObj.i == i && parsedObj.j == j) {
+      return m;
     }
   }
+
+  // If cache i,j was not in momento:
+  return null;
 }
+
+// Updates the momento by inserting the cache into the array, while removing the original if it exists
+function appendToMomento(cache: Geocache) {
+  // If the momento of this cache exists, remove it
+  const momentoIdx = searchMomento(cache.i, cache.j);
+  if (momentoIdx != null) {
+    momentoArr.splice(momentoIdx, 1);
+  }
+
+  // Insert the cache intormation into the momento array
+  momentoArr.push(cache.toMomento());
+}
+
+function updateMomento() {
+  for (let i = 0; i < geocacheArr.length; i++) {
+    appendToMomento(geocacheArr[i]);
+  }
+}
+
+// --------------------------------------------------------------------
+// ------ INITIAL LOAD ------
+// --------------------------------------------------------------------
+spawnCache(playerLocation);
