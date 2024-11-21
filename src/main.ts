@@ -1,5 +1,5 @@
 // @deno-types="npm:@types/leaflet@^1.9.14"
-import leaflet from "leaflet";
+import leaflet, { LatLng } from "leaflet";
 import { Board } from "./board.ts";
 
 // Style sheets
@@ -95,31 +95,38 @@ class Geocache implements Momento<string> {
 // ------ INITIALIZATIONS & SET UP ------
 // --------------------------------------------------------------------
 // Add a marker to represent the player
-let playerLocation = OAKES_CLASSROOM;
+let playerLocation: leaflet.LatLng = OAKES_CLASSROOM;
 const playerMarker = leaflet.marker(playerLocation);
+let geoLocationToggle = false;
 playerMarker.bindTooltip("That's you!");
 playerMarker.addTo(map);
 
 // Display the player's points
-const playerCoins: Coin[] = [];
+let playerCoins: Coin[] = [];
 const statusPanel = document.querySelector<HTMLDivElement>("#statusPanel")!;
-statusPanel.innerHTML = "No presents yet..";
 
 // Custom icon for cache spots
+const cacheIconArray: leaflet.Layer[] = [];
 const cacheIcon = new leaflet.DivIcon({
   className: "custom-cache-icon",
   html: '<font size="5">🎄</font>',
   iconSize: [0, 0],
   iconAnchor: [0, 0],
 });
-const cacheIconArray: leaflet.Layer[] = [];
 
 // Grid System for displaying caches on
 const mapBoard = new Board(TILE_DEGREES, NEIGHBORHOOD_SIZE);
 
 // Temporary Data Storage
 const geocacheArr: Geocache[] = [];
-const momentoArr: string[] = [];
+let momentoArr: string[] = [];
+
+function updatePolyline() {
+  const singleLine = [];
+  singleLine.push(playerMarker.getLatLng());
+  singleLine.push(playerLocation);
+  leaflet.polyline(singleLine, { color: "red" }).addTo(map);
+}
 
 // --------------------------------------------------------------------
 // ------ PLAYER MOVEMENT ------
@@ -127,8 +134,10 @@ const momentoArr: string[] = [];
 // Moves the player and spawns/regenerates caches around them
 const playerMoved = new Event("player-moved");
 document.addEventListener("player-moved", function () {
+  updatePolyline();
   playerMarker.setLatLng(playerLocation);
   map.panTo(playerLocation);
+  storePlayerLoc();
   updateMomento();
   clearCacheMarker(); // Clear current markers before redrawing
   spawnCache(playerLocation); // Spawn in caches surrounding the player
@@ -140,7 +149,30 @@ function playerMoveTo(lat: number, lng: number) {
   document.dispatchEvent(playerMoved);
 }
 
+function geoMoveTo(showLine: boolean) {
+  map.locate({ watch: true });
+  if (!showLine) {
+    // Set player marker so the move does not draw a line, in case of a large jump
+    playerMarker.setLatLng(playerLocation);
+    document.dispatchEvent(playerMoved);
+  } else {
+    document.dispatchEvent(playerMoved);
+  }
+}
+
+map.addEventListener("locationfound", function (event) {
+  playerLocation = event.latlng;
+  document.dispatchEvent(playerMoved);
+});
+
 // -- Movement Buttons --
+const sensorBtn = document.querySelector<HTMLButtonElement>("#sensor")!;
+sensorBtn.addEventListener("click", function () {
+  geoLocationToggle = !geoLocationToggle;
+  geoMoveTo(false);
+  // document.dispatchEvent(playerMoved);
+});
+
 const northBtn = document.querySelector<HTMLButtonElement>("#north")!;
 northBtn.addEventListener("click", function () {
   playerMoveTo(playerLocation.lat + TILE_DEGREES, playerLocation.lng);
@@ -161,13 +193,21 @@ eastBtn.addEventListener("click", function () {
   playerMoveTo(playerLocation.lat, playerLocation.lng + TILE_DEGREES);
 });
 
+// -- Trash Data --
+const trashBtn = document.querySelector<HTMLButtonElement>("#reset")!;
+trashBtn.addEventListener("click", function () {
+  if (confirm("Reset your game?\n(This cannot be undone)")) {
+    resetGame();
+  }
+});
+
 // --------------------------------------------------------------------
 // ------ CACHE SPAWNING ------
 // --------------------------------------------------------------------
 // Add caches to the map
 function spawnCache(origin: leaflet.LatLng) {
   // Look at all cells around the provided origin
-  // Check each cell for luck and nstantiate a cache if it is lucky
+  // Check each cell for luck and instantiate a cache if it is lucky
   const cellArr = mapBoard.getCellsNearPoint(origin);
   cellArr.forEach((cell) => {
     if (
@@ -195,7 +235,6 @@ function clearCacheMarker() {
 
 // Creates a cache for the first time
 function instantiateCache(i: number, j: number): Geocache {
-  // console.log("instancing caches");
   const cache = new Geocache();
   cache.i = i;
   cache.j = j;
@@ -255,6 +294,7 @@ function drawCache(cache: Geocache) {
             .coins.length.toString();
           statusPanel.innerHTML =
             `Stolen present ${transferred.i}:${transferred.j}#${transferred.serial}<br>${playerCoins.length} presents stolen`;
+          cacheValueChanged();
         } else {
           alert("There's no more presents to give.");
         }
@@ -271,6 +311,7 @@ function drawCache(cache: Geocache) {
             .coins.length.toString();
           statusPanel.innerHTML =
             `Given present ${transferred.i}:${transferred.j}#${transferred.serial}<br>${playerCoins.length} presents stolen`;
+          cacheValueChanged();
         } else {
           alert("Your sack is empty.");
         }
@@ -311,9 +352,91 @@ function updateMomento() {
   for (let i = 0; i < geocacheArr.length; i++) {
     appendToMomento(geocacheArr[i]);
   }
+  storeMomentoArr();
+}
+
+// -- Persistant Data Storage --
+// Generated cache/momento data
+function storeMomentoArr() {
+  const momentoStr = JSON.stringify(momentoArr);
+  localStorage.setItem("momento data", momentoStr);
+}
+
+function readMomentoData() {
+  const momentoData = localStorage.getItem("momento data");
+  if (momentoData) {
+    const parsedCaches = JSON.parse(momentoData);
+    momentoArr = parsedCaches;
+    parsedCaches.forEach((cacheStr: string) => {
+      const item = new Geocache();
+      item.fromMomento(cacheStr);
+      geocacheArr.push(item);
+    });
+  }
+}
+
+// Player Location Data
+function storePlayerLoc() {
+  const playerStr = JSON.stringify(playerLocation);
+  localStorage.setItem("Player Location", playerStr);
+}
+
+function readPlayerLoc() {
+  const playerData = localStorage.getItem("Player Location");
+  if (playerData) {
+    const parsedData = JSON.parse(playerData);
+    playerLocation.lat = parsedData.lat;
+    playerLocation.lng = parsedData.lng;
+    playerMarker.setLatLng(playerLocation);
+    map.panTo(playerLocation);
+  }
+}
+
+// Player Coins Data
+function storePlayerCoins() {
+  const coinsStr = JSON.stringify(playerCoins);
+  localStorage.setItem("Player Coins", coinsStr);
+  readPlayerLoc();
+}
+
+function readPlayerCoins() {
+  const pCoins = localStorage.getItem("Player Coins");
+  if (pCoins) {
+    const parsedData = JSON.parse(pCoins);
+    playerCoins = parsedData;
+  }
+}
+
+function cacheValueChanged() {
+  updateMomento();
+  storeMomentoArr();
+  storePlayerCoins();
+}
+
+function restoreData() {
+  readMomentoData();
+  readPlayerLoc();
+  readPlayerCoins();
+}
+
+function resetGame() {
+  playerLocation = leaflet.latLng(36.98949379578401, -122.06277128548504);
+  document.dispatchEvent(playerMoved);
+  // Clear Polylines
+  map.eachLayer((layer) => {
+    if (layer instanceof leaflet.Polyline) {
+      map.removeLayer(layer);
+    }
+  });
+  localStorage.clear();
 }
 
 // --------------------------------------------------------------------
 // ------ INITIAL LOAD ------
 // --------------------------------------------------------------------
+
+// Check if localsotage has data to restore
+if (localStorage.length >= 0) {
+  restoreData();
+}
 spawnCache(playerLocation);
