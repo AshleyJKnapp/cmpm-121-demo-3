@@ -1,5 +1,5 @@
 // @deno-types="npm:@types/leaflet@^1.9.14"
-import leaflet, { LatLng } from "leaflet";
+import leaflet from "leaflet";
 import { Board } from "./board.ts";
 
 // Style sheets
